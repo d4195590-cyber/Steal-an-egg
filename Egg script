@@ -1,0 +1,1092 @@
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local ApexUI = loadstring(game:HttpGet("https://pastebin.com/raw/YDjtnjyE"))()
+local Window = ApexUI:CreateWindow({Title = "Steal Egg"})
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+local LP = Players.LocalPlayer
+
+local function Log(...)
+    local args = {...}
+    local parts = {}
+    for i = 1, #args do parts[i] = tostring(args[i]) end
+    print("[StealEgg] " .. table.concat(parts, " "))
+end
+
+Log("=== ЗАПУСК ===")
+
+local autoEggEnabled = false
+local autoEggConnection = nil
+local descendantConnection = nil
+local activePrompts = {}
+local trackedPrompts = {}
+
+local autoBatEnabled = false
+local autoBatConnection = nil
+
+local autoEggsEnabled = false
+local autoEggsThread = nil
+local selectedLocation = "1 локация"
+local prePointDone = false
+local isHoldingPrompt = false
+local lockedPrompt = nil
+
+local ReturnThread = nil
+local ReturnThreadActive = false
+
+local AntiGuardEnabled = false
+local AntiGuardTarget = Vector3.new(524.0, 70.6, -372.9)
+local AntiGuardBusy = false
+
+local PRE_POINT = Vector3.new(519.7, 70.6, -372.6)
+local RETURN_POINT = Vector3.new(517.1, 70.6, -377.7)
+
+local LOCATIONS = {
+    ["1 локация"] = Vector3.new(602.0, 70.6, -344.3),
+    ["2 локация"] = Vector3.new(736.1, 70.6, -377.4),
+    ["3 локация"] = Vector3.new(950.7, 70.6, -351.1),
+    ["4 локация"] = Vector3.new(1182.6, 70.6, -377.9),
+    ["5 локация"] = Vector3.new(1497.1, 70.6, -351.2),
+    ["6 локация"] = Vector3.new(1880.3, 70.6, -372.1),
+    ["7 локация"] = Vector3.new(2298.0, 70.6, -355.2),
+    ["8 локация"] = Vector3.new(2825.5, 70.6, -373.0),
+    ["9 локация"] = Vector3.new(3388.6, 70.6, -352.6),
+    ["10 локация"] = Vector3.new(4037.4, 70.6, -373.4),
+    ["11 локация"] = Vector3.new(4799.5, 70.6, -356.9),
+    ["12 локация"] = Vector3.new(5671.2, 70.6, -359.5)
+}
+
+local EggStateModule = nil
+pcall(function()
+    EggStateModule = require(ReplicatedStorage.Client.EggState)
+end)
+Log("EggStateModule:", type(EggStateModule))
+
+local Steal = {
+    Active = false,
+    Carrying = false,
+    CarryUid = nil,
+    CarryAreaId = nil,
+}
+
+local function getRoot()
+    local char = LP.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+    local char = LP.Character
+    if not char then return nil end
+    return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function DoAntiGuardTP()
+    if AntiGuardBusy then return end
+    AntiGuardBusy = true
+    
+    task.spawn(function()
+        local root = getRoot()
+        local humanoid = getHumanoid()
+        if not root or not humanoid then 
+            AntiGuardBusy = false
+            return 
+        end
+        
+        local originalPos = root.Position
+        Log("Анти охранник: старт")
+        
+        for i = 1, 4 do
+            root = getRoot()
+            humanoid = getHumanoid()
+            if root and humanoid then
+                pcall(function()
+                    root.CFrame = CFrame.new(AntiGuardTarget)
+                    root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    local lookVector = root.CFrame.LookVector
+                    local forwardPos = AntiGuardTarget + (lookVector * 50)
+                    humanoid:MoveTo(forwardPos)
+                end)
+            end
+            
+            RunService.Heartbeat:Wait()
+            
+            root = getRoot()
+            humanoid = getHumanoid()
+            if root and humanoid then
+                pcall(function()
+                    root.CFrame = CFrame.new(originalPos)
+                    root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    local lookVector = root.CFrame.LookVector
+                    local forwardPos = originalPos + (lookVector * 50)
+                    humanoid:MoveTo(forwardPos)
+                end)
+            end
+            
+            RunService.Heartbeat:Wait()
+        end
+        
+        Log("Анти охранник: завершено")
+        task.wait(0.5)
+        AntiGuardBusy = false
+    end)
+end
+
+local function StartReturnThread()
+    if ReturnThreadActive then
+        Log("Поток возврата уже активен")
+        return
+    end
+
+    ReturnThreadActive = true
+    Log("!!! ЗАПУСК ПОТОКА ВОЗВРАТА !!!")
+
+    ReturnThread = task.spawn(function()
+        local lastLog = 0
+
+        while ReturnThreadActive and autoEggsEnabled do
+            if not Steal.Carrying then
+                Log("Поток возврата: яйцо отпущено, выходим")
+                ReturnThreadActive = false
+                break
+            end
+
+            local humanoid = getHumanoid()
+            local root = getRoot()
+
+            if humanoid and root and humanoid.Health > 0 then
+                pcall(function()
+                    humanoid:MoveTo(RETURN_POINT)
+                end)
+
+                local dist = (root.Position - RETURN_POINT).Magnitude
+
+                if os.clock() - lastLog >= 2 then
+                    lastLog = os.clock()
+                    Log("Поток возврата: dist =", math.floor(dist))
+                end
+
+                if dist < 5 then
+                    Log("Поток возврата: ДОШЁЛ до RETURN_POINT!")
+
+                    if type(EggStateModule) == "table"
+                        and type(EggStateModule.DropFieldEgg) == "function"
+                    then
+                        pcall(EggStateModule.DropFieldEgg, "PlayerRequest")
+                    end
+
+                    task.wait(0.5)
+
+                    Steal.Carrying = false
+                    Steal.CarryUid = nil
+                    Steal.CarryAreaId = nil
+
+                    ReturnThreadActive = false
+                    Log("Поток возврата: яйцо сдано!")
+                    break
+                end
+            end
+
+            task.wait(0.1)
+        end
+
+        ReturnThread = nil
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if AntiGuardEnabled and not Steal.Carrying and not AntiGuardBusy then
+            if type(EggStateModule) == "table" and type(EggStateModule.ReadOwnerEggs) == "function" then
+                local ok, ownerEggs = pcall(EggStateModule.ReadOwnerEggs, LP.UserId)
+                if ok and type(ownerEggs) == "table" then
+                    local inHand = false
+                    for _, egg in pairs(ownerEggs) do
+                        if type(egg) == "table" and egg.Placement == nil then
+                            inHand = true
+                            break
+                        end
+                    end
+                    if inHand then
+                        Log("ForceDetect: яйцо в руках (через ReadOwnerEggs)!")
+                        Steal.Carrying = true
+                        DoAntiGuardTP()
+                    end
+                end
+            end
+        end
+    end
+end)
+
+if type(EggStateModule) == "table" then
+    local carryChanged = EggStateModule.CarryChanged
+    if type(carryChanged) == "table" and type(carryChanged.Connect) == "function" then
+        pcall(carryChanged.Connect, carryChanged, function(arg)
+            local isCarrying = type(arg) == "table" and arg.IsCarrying == true
+            local uid = type(arg) == "table" and arg.Uid or nil
+            local areaId = type(arg) == "table" and arg.AreaId or nil
+
+            Log(string.format("CarryChanged: IsCarrying=%s Uid=%s Area=%s",
+                tostring(isCarrying), tostring(uid), tostring(areaId)))
+
+            Steal.Carrying = isCarrying
+
+            if isCarrying and type(uid) == "string" then
+                Steal.CarryUid = uid
+                Steal.CarryAreaId = areaId
+            end
+
+            if isCarrying then
+                if AntiGuardEnabled then
+                    DoAntiGuardTP()
+                elseif autoEggsEnabled then
+                    if not ReturnThreadActive then
+                        task.defer(StartReturnThread)
+                    end
+                end
+            end
+        end)
+        Log("CarryChanged подключён")
+    end
+end
+
+local function GetFieldEggs()
+    local eggState = EggStateModule
+
+    if type(eggState) == "table" and type(eggState.ReadFieldEggs) == "function" then
+        local records = nil
+        task.spawn(function()
+            local ok, result = pcall(eggState.ReadFieldEggs)
+            ok = ok and type(result) == "table"
+            ok = ok and type(result.Records) == "table"
+            ok = ok and next(result.Records) ~= nil
+            if ok then
+                records = result.Records
+            end
+        end)
+
+        if records then
+            return records
+        end
+    end
+
+    local networking = ReplicatedStorage:FindFirstChild("Packages")
+    networking = networking and networking:FindFirstChild("Networking")
+    local rfSnapshot = networking and networking:FindFirstChild("RF/EggWorld/AskFieldEggSnapshot")
+
+    if not rfSnapshot or not rfSnapshot:IsA("RemoteFunction") then
+        return nil
+    end
+
+    local records = nil
+    local done = false
+    task.spawn(function()
+        local ok, result = pcall(rfSnapshot.InvokeServer, rfSnapshot)
+        ok = ok and type(result) == "table"
+        ok = ok and type(result.Records) == "table"
+        if ok then
+            records = result.Records
+        end
+        done = true
+    end)
+
+    local startTime = os.clock()
+    while not done and os.clock() - startTime < 4 do
+        RunService.Heartbeat:Wait()
+    end
+
+    return records
+end
+
+local function FindNearestEggNear(targetPos, radius)
+    radius = radius or 100
+    local records = GetFieldEggs()
+    if not records then return nil end
+
+    local nearest = nil
+    local nearestDist = radius
+
+    for _, record in pairs(records) do
+        if type(record) == "table"
+            and record.State == "Slot"
+            and typeof(record.BottomCFrame) == "CFrame"
+        then
+            local dist = (record.BottomCFrame.Position - targetPos).Magnitude
+            if dist < nearestDist then
+                nearestDist = dist
+                nearest = record
+            end
+        end
+    end
+
+    return nearest
+end
+
+local function getBatTool()
+    local char = LP.Character
+    if char then
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") and string.find(string.lower(tool.Name), "bat") then
+                return tool
+            end
+        end
+    end
+
+    local backpack = LP:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") and string.find(string.lower(tool.Name), "bat") then
+                return tool
+            end
+        end
+    end
+
+    return nil
+end
+
+local function equipBat()
+    local char = LP.Character
+    if char then
+        for _, tool in ipairs(char:GetChildren()) do
+            if tool:IsA("Tool") and string.find(string.lower(tool.Name), "bat") then
+                return true
+            end
+        end
+    end
+
+    local tool = getBatTool()
+    if not tool then return false end
+
+    local humanoid = getHumanoid()
+    if humanoid then
+        pcall(function()
+            humanoid:EquipTool(tool)
+        end)
+        return true
+    end
+
+    return false
+end
+
+local function getEquippedBat()
+    local char = LP.Character
+    if not char then return nil end
+
+    for _, tool in ipairs(char:GetChildren()) do
+        if tool:IsA("Tool") and string.find(string.lower(tool.Name), "bat") then
+            return tool
+        end
+    end
+
+    return nil
+end
+
+local function isPlayerInRadius(player, radius)
+    local root = getRoot()
+    if not root then return false end
+
+    if player == LP then return false end
+    if not player.Character then return false end
+
+    local hum = player.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+
+    local targetRoot = player.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return false end
+
+    local dist = (root.Position - targetRoot.Position).Magnitude
+    return dist <= radius
+end
+
+local function autoBatLoop()
+    local humanoid = getHumanoid()
+    if not humanoid or humanoid.Health <= 0 then return end
+
+    local root = getRoot()
+    if not root then return end
+
+    local equippedBat = getEquippedBat()
+
+    if not equippedBat then
+        equipBat()
+        return
+    end
+
+    local targetFound = false
+    local nearestTarget = nil
+    local nearestDist = math.huge
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if isPlayerInRadius(player, 12) then
+            targetFound = true
+
+            local targetRoot = player.Character:FindFirstChild("HumanoidRootPart")
+            if targetRoot then
+                local dist = (root.Position - targetRoot.Position).Magnitude
+                if dist < nearestDist then
+                    nearestDist = dist
+                    nearestTarget = player
+                end
+            end
+        end
+    end
+
+    if targetFound then
+        if nearestTarget then
+            local targetRoot = nearestTarget.Character:FindFirstChild("HumanoidRootPart")
+            if targetRoot then
+                local lookAt = CFrame.new(root.Position, Vector3.new(targetRoot.Position.X, root.Position.Y, targetRoot.Position.Z))
+                root.CFrame = lookAt
+            end
+        end
+
+        pcall(function()
+            equippedBat:Activate()
+        end)
+    end
+end
+
+local function startAutoBat()
+    task.spawn(function()
+        equipBat()
+    end)
+
+    autoBatConnection = RunService.Heartbeat:Connect(function()
+        if not autoBatEnabled then return end
+        pcall(autoBatLoop)
+    end)
+end
+
+local function stopAutoBat()
+    if autoBatConnection then
+        autoBatConnection:Disconnect()
+        autoBatConnection = nil
+    end
+end
+
+local function getPromptPart(prompt)
+    if prompt.Parent and prompt.Parent:IsA("BasePart") then
+        return prompt.Parent
+    elseif prompt.Parent and prompt.Parent:IsA("Attachment") then
+        local parent = prompt.Parent.Parent
+        if parent and parent:IsA("BasePart") then
+            return parent
+        end
+    end
+    return nil
+end
+
+local function getPromptDistance(prompt)
+    local root = getRoot()
+    if not root then return math.huge end
+
+    local part = getPromptPart(prompt)
+    if not part then return math.huge end
+
+    return (root.Position - part.Position).Magnitude
+end
+
+local function isPromptInRange(prompt)
+    local distance = getPromptDistance(prompt)
+    local maxDistance = prompt.MaxActivationDistance or 10
+
+    return distance <= maxDistance
+end
+
+local function HoldPromptFull(prompt, cancelFn)
+    if not prompt or not prompt.Parent then return false end
+
+    local holdDuration = prompt.HoldDuration
+    if not holdDuration or holdDuration <= 0 then
+        holdDuration = 0.5
+    end
+
+    Log("HoldPromptFull: зажал промт на", holdDuration, "сек")
+
+    local ok = pcall(function()
+        prompt:InputHoldBegin()
+    end)
+
+    if not ok then
+        Log("HoldPromptFull: InputHoldBegin FAILED")
+        return false
+    end
+
+    local startTime = os.clock()
+    local totalTime = holdDuration + 0.2
+
+    while os.clock() - startTime < totalTime do
+        if type(cancelFn) == "function" and cancelFn() then
+            break
+        end
+        if not prompt.Parent then break end
+        task.wait(0.05)
+    end
+
+    pcall(function()
+        prompt:InputHoldEnd()
+    end)
+
+    Log("HoldPromptFull: отпустил промт")
+    task.wait(0.2)
+
+    return true
+end
+
+local function holdPrompt(prompt)
+    if activePrompts[prompt] then return end
+    if isHoldingPrompt then return end
+
+    activePrompts[prompt] = true
+    isHoldingPrompt = true
+
+    task.spawn(function()
+        HoldPromptFull(prompt, function()
+            return not autoEggEnabled
+        end)
+        isHoldingPrompt = false
+        activePrompts[prompt] = nil
+    end)
+end
+
+local function trackPrompt(prompt)
+    if not prompt:IsA("ProximityPrompt") then return end
+    if trackedPrompts[prompt] then return end
+    trackedPrompts[prompt] = true
+end
+
+local function scanPrompts()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            trackPrompt(obj)
+        end
+    end
+end
+
+local function checkPrompts()
+    if not autoEggEnabled then return end
+    if isHoldingPrompt then return end
+
+    for prompt in pairs(activePrompts) do
+        if not prompt or not prompt.Parent or not isPromptInRange(prompt) then
+            activePrompts[prompt] = nil
+        end
+    end
+
+    local nearestPrompt = nil
+    local nearestDist = math.huge
+
+    for prompt in pairs(trackedPrompts) do
+        if prompt and prompt.Parent and prompt.Enabled and not activePrompts[prompt] then
+            if isPromptInRange(prompt) then
+                local dist = getPromptDistance(prompt)
+                if dist < nearestDist then
+                    nearestDist = dist
+                    nearestPrompt = prompt
+                end
+            end
+        elseif not prompt or not prompt.Parent then
+            trackedPrompts[prompt] = nil
+        end
+    end
+
+    if nearestPrompt then
+        holdPrompt(nearestPrompt)
+    end
+end
+
+local function startAutoEgg()
+    trackedPrompts = {}
+    activePrompts = {}
+
+    scanPrompts()
+
+    descendantConnection = workspace.DescendantAdded:Connect(function(obj)
+        if not autoEggEnabled then return end
+        if obj:IsA("ProximityPrompt") then
+            trackPrompt(obj)
+        end
+    end)
+
+    autoEggConnection = RunService.Heartbeat:Connect(function()
+        if not autoEggEnabled then return end
+        checkPrompts()
+    end)
+end
+
+local function stopAutoEgg()
+    if autoEggConnection then
+        autoEggConnection:Disconnect()
+        autoEggConnection = nil
+    end
+
+    if descendantConnection then
+        descendantConnection:Disconnect()
+        descendantConnection = nil
+    end
+
+    for prompt in pairs(activePrompts) do
+        pcall(function()
+            prompt:InputHoldEnd()
+        end)
+    end
+
+    activePrompts = {}
+    trackedPrompts = {}
+end
+
+local function findStealPrompt(centerPos, radius)
+    local root = getRoot()
+    if not root then return nil end
+
+    local nearest = nil
+    local nearestDist = math.huge
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local txt = string.lower(tostring(obj.ActionText or ""))
+            if string.find(txt, "steal") then
+                local part = getPromptPart(obj)
+                if part then
+                    local distToCenter = (centerPos - part.Position).Magnitude
+                    local distToMe = (root.Position - part.Position).Magnitude
+
+                    if distToCenter <= radius and distToMe < nearestDist then
+                        nearestDist = distToMe
+                        nearest = obj
+                    end
+                end
+            end
+        end
+    end
+
+    return nearest
+end
+
+local function isPlayerStuck()
+    if Steal.Carrying then return false end
+    if isHoldingPrompt then return false end
+
+    local humanoid = getHumanoid()
+    if not humanoid then return true end
+
+    local state = humanoid:GetState()
+    if state == Enum.HumanoidStateType.Physics then return true end
+    if state == Enum.HumanoidStateType.FallingDown then return true end
+    if state == Enum.HumanoidStateType.Ragdoll then return true end
+    if humanoid.PlatformStand then return true end
+
+    return false
+end
+
+local function waitForArrival(targetPos, timeout)
+    local startTime = os.clock()
+
+    while autoEggsEnabled do
+        if Steal.Carrying then
+            return false, "carrying"
+        end
+
+        local humanoid = getHumanoid()
+        local root = getRoot()
+
+        if not humanoid or not root then
+            task.wait(0.1)
+            continue
+        end
+
+        if isPlayerStuck() then
+            return false, "stuck"
+        end
+
+        humanoid:MoveTo(targetPos)
+
+        local distance = (root.Position - targetPos).Magnitude
+
+        if distance < 3 then
+            return true, "arrived"
+        end
+
+        if os.clock() - startTime > (timeout or 15) then
+            return false, "timeout"
+        end
+
+        task.wait(0.1)
+    end
+
+    return false, "disabled"
+end
+
+local function autoEggsLoop()
+    if not autoEggsEnabled then return end
+
+    local humanoid = getHumanoid()
+    if not humanoid or humanoid.Health <= 0 then return end
+
+    Log("autoEggsLoop: старт, Carrying:", Steal.Carrying, "ReturnActive:", ReturnThreadActive)
+
+    if ReturnThreadActive then
+        Log("autoEggsLoop: поток возврата активен, ждём сдачи...")
+
+        local waitStart = os.clock()
+        while ReturnThreadActive and os.clock() - waitStart < 60 and autoEggsEnabled do
+            task.wait(0.3)
+        end
+
+        Log("autoEggsLoop: поток возврата завершён")
+        task.wait(1)
+        return
+    end
+
+    if Steal.Carrying then
+        if AntiGuardEnabled then
+            task.wait(1)
+            return
+        end
+
+        Log("autoEggsLoop: яйцо в руках, запускаю поток возврата")
+        StartReturnThread()
+
+        local waitStart = os.clock()
+        while ReturnThreadActive and os.clock() - waitStart < 60 and autoEggsEnabled do
+            task.wait(0.3)
+        end
+
+        task.wait(1)
+        return
+    end
+
+    if not prePointDone then
+        local preArrived, reason = waitForArrival(PRE_POINT, 30)
+
+        if reason == "carrying" then
+            Log("autoEggsLoop: прервано на пре-точке")
+            return
+        end
+
+        if not preArrived then
+            Window:Notify("Авто яйца", "Не дошёл до пре-точки, повтор...", "warn")
+            task.wait(0.5)
+            return
+        end
+
+        prePointDone = true
+    end
+
+    local targetPos = LOCATIONS[selectedLocation]
+    if not targetPos then
+        Window:Notify("Авто яйца", "Локация не найдена!", "error")
+        return
+    end
+
+    while autoEggsEnabled do
+        local arrived, reason = waitForArrival(targetPos, 30)
+
+        if reason == "carrying" then
+            Log("autoEggsLoop: прервано на пути")
+            return
+        end
+
+        if not autoEggsEnabled then return end
+        if arrived then break end
+
+        if reason == "stuck" then
+            Window:Notify("Авто яйца", "Игрок в рагдолле, повтор...", "warn")
+        else
+            Window:Notify("Авто яйца", "Не дошёл до локации, повтор...", "warn")
+        end
+        task.wait(0.5)
+    end
+
+    if not autoEggsEnabled then return end
+    task.wait(0.3)
+
+    local nearestEgg = FindNearestEggNear(targetPos, 150)
+
+    if nearestEgg and typeof(nearestEgg.BottomCFrame) == "CFrame" then
+        local eggPos = nearestEgg.BottomCFrame.Position
+        local tpPos = eggPos + Vector3.new(0, 3, 0)
+
+        Log("Телепорт к яйцу, uid:", nearestEgg.Uid)
+
+        local root = getRoot()
+        if root then
+            pcall(function()
+                root.CFrame = CFrame.new(tpPos)
+                root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+            end)
+
+            task.wait(0.3)
+        end
+    end
+
+    if not autoEggsEnabled then return end
+
+    if not lockedPrompt or not lockedPrompt.Parent or not lockedPrompt.Enabled then
+        lockedPrompt = findStealPrompt(targetPos, 80)
+    end
+
+    local stealPrompt = lockedPrompt
+
+    if stealPrompt and autoEggsEnabled then
+        local promptPart = getPromptPart(stealPrompt)
+        if promptPart then
+            Log("Нашёл Steal промт, полное удержание")
+
+            local root = getRoot()
+            local humanoid2 = getHumanoid()
+            if root and humanoid2 then
+                local dist = (root.Position - promptPart.Position).Magnitude
+                if dist > 5 then
+                    humanoid2:MoveTo(promptPart.Position)
+                    local waitStart = os.clock()
+                    while os.clock() - waitStart < 5 and autoEggsEnabled do
+                        if Steal.Carrying then break end
+                        local r = getRoot()
+                        if r and (r.Position - promptPart.Position).Magnitude < 5 then break end
+                        task.wait(0.1)
+                    end
+                end
+            end
+
+            if not autoEggsEnabled then return end
+            if Steal.Carrying then
+                Log("autoEggsLoop: яйцо уже в руках перед удержанием!")
+                return
+            end
+
+            isHoldingPrompt = true
+            Steal.Active = true
+
+            HoldPromptFull(stealPrompt, function()
+                return not autoEggsEnabled
+            end)
+
+            isHoldingPrompt = false
+            lockedPrompt = nil
+            Log("Удержание завершено, Carrying:", Steal.Carrying)
+        end
+    else
+        Log("Steal промт НЕ найден!")
+        Window:Notify("Авто яйца", "Промт 'Steal' не найден!", "warn")
+    end
+
+    Steal.Active = false
+
+    task.wait(1)
+
+    if Steal.Carrying then
+        if AntiGuardEnabled then
+            return
+        end
+
+        Log("autoEggsLoop: яйцо стабильно! Запускаю поток возврата")
+        Window:Notify("Авто яйца", "✅ Яйцо в руках, несу домой!", "success", 3)
+        StartReturnThread()
+
+        local waitStart = os.clock()
+        while ReturnThreadActive and os.clock() - waitStart < 60 and autoEggsEnabled do
+            task.wait(0.3)
+        end
+
+        task.wait(1)
+    else
+        Window:Notify("Авто яйца", "⚠️ Яйцо выпало, повтор...", "warn", 3)
+        Steal.CarryUid = nil
+        Steal.CarryAreaId = nil
+        task.wait(0.5)
+    end
+end
+
+local trapOriginalCanTouch = {}
+local trapConnections = {}
+local trapDescendantConnections = {}
+
+local function disarmTrap(trap)
+    if not trap or not trap.Parent then return end
+    if trap:GetAttribute("Owner") == LP.Name then return end
+
+    local function disablePart(part)
+        if part:IsA("BasePart") and trapOriginalCanTouch[part] == nil then
+            trapOriginalCanTouch[part] = part.CanTouch
+            pcall(function()
+                part.CanTouch = false
+            end)
+        end
+    end
+
+    disablePart(trap)
+    for _, desc in ipairs(trap:GetDescendants()) do
+        disablePart(desc)
+    end
+
+    local conn = trap.DescendantAdded:Connect(function(child)
+        if autoEggsEnabled then
+            disablePart(child)
+        end
+    end)
+
+    table.insert(trapDescendantConnections, conn)
+end
+
+local function scanAllTraps()
+    for _, trap in ipairs(CollectionService:GetTagged("PlacedTrap")) do
+        disarmTrap(trap)
+    end
+end
+
+local function restoreAllTraps()
+    for part, canTouch in pairs(trapOriginalCanTouch) do
+        if part and part.Parent then
+            pcall(function()
+                part.CanTouch = canTouch
+            end)
+        end
+    end
+    table.clear(trapOriginalCanTouch)
+end
+
+local function startAntiTrap()
+    scanAllTraps()
+
+    local conn = CollectionService:GetInstanceAddedSignal("PlacedTrap"):Connect(function(trap)
+        task.defer(disarmTrap, trap)
+    end)
+
+    table.insert(trapConnections, conn)
+end
+
+local function stopAntiTrap()
+    for _, conn in ipairs(trapConnections) do
+        pcall(function()
+            conn:Disconnect()
+        end)
+    end
+    table.clear(trapConnections)
+
+    for _, conn in ipairs(trapDescendantConnections) do
+        pcall(function()
+            conn:Disconnect()
+        end)
+    end
+    table.clear(trapDescendantConnections)
+
+    restoreAllTraps()
+end
+
+local function startAutoEggs()
+    prePointDone = false
+    isHoldingPrompt = false
+    lockedPrompt = nil
+    Steal.Active = false
+    Steal.Carrying = false
+    ReturnThreadActive = false
+
+    startAntiTrap()
+    Window:Notify("Anti Trap", "Ловушки отключены", "info")
+    Log("=== Авто яйца ВКЛ ===")
+
+    autoEggsThread = task.spawn(function()
+        while autoEggsEnabled do
+            local ok, err = pcall(autoEggsLoop)
+            if not ok then
+                Log("autoEggsLoop ERROR:", tostring(err))
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+local function stopAutoEggs()
+    isHoldingPrompt = false
+    lockedPrompt = nil
+    Steal.Active = false
+    ReturnThreadActive = false
+
+    stopAntiTrap()
+    Window:Notify("Anti Trap", "Ловушки восстановлены", "info")
+    Log("=== Авто яйца ВЫКЛ ===")
+
+    local humanoid = getHumanoid()
+    if humanoid then
+        humanoid:MoveTo(humanoid.RootPart and humanoid.RootPart.Position or Vector3.new(0, 0, 0))
+    end
+end
+
+LP.CharacterAdded:Connect(function(char)
+    isHoldingPrompt = false
+    lockedPrompt = nil
+    prePointDone = false
+    Steal.Active = false
+    Steal.Carrying = false
+
+    if autoBatEnabled then
+        task.wait(1)
+        equipBat()
+    end
+end)
+
+local MainTab = Window:CreateTab("Main")
+local AutoEggsTab = Window:CreateTab("Авто яйца")
+
+MainTab:CreateToggle("Авто подобрать яйцо (подойти к нужному надо)", false, function(value)
+    autoEggEnabled = value
+    if value then
+        startAutoEgg()
+        Window:Notify("Авто яйцо", "Включено! Подойди к яйцу.", "success")
+    else
+        stopAutoEgg()
+        Window:Notify("Авто яйцо", "Выключено!", "error")
+    end
+end)
+
+MainTab:CreateToggle("Авто бить", false, function(value)
+    autoBatEnabled = value
+    if value then
+        startAutoBat()
+        Window:Notify("Авто бить", "Включено!", "success")
+    else
+        stopAutoBat()
+        Window:Notify("Авто бить", "Выключено!", "error")
+    end
+end)
+
+AutoEggsTab:CreateLabel("⚠️ АНТИ ОХРАННИК НЕ РАБОТАЕТ ВМЕСТЕ С АВТО ЯЙЦАМИ")
+
+AutoEggsTab:CreateToggle("Анти охранник", false, function(value)
+    AntiGuardEnabled = value
+    if value then
+        Window:Notify("Анти охранник", "Включено", "success")
+    else
+        Window:Notify("Анти охранник", "Выключено!", "error")
+    end
+end)
+
+AutoEggsTab:CreateToggle("Авто яйца", false, function(value)
+    autoEggsEnabled = value
+    if value then
+        startAutoEggs()
+        Window:Notify("Авто яйца", "Включено! Локация: " .. selectedLocation, "success")
+    else
+        stopAutoEggs()
+        Window:Notify("Авто яйца", "Выключено!", "error")
+    end
+end)
+
+AutoEggsTab:CreateDropdown("Локации", {
+    "1 локация","2 локация","3 локация","4 локация","5 локация","6 локация",
+    "7 локация","8 локация","9 локация","10 локация","11 локация","12 локация"
+}, function(selected)
+    selectedLocation = selected
+    Window:Notify("Локации", "Выбрано: " .. selected, "info")
+end)
+
+Window:Notify("Steal Egg", "Загружен!", "success", 5)
+Log("=== СКРИПТ ЗАГРУЖЕН ===")
